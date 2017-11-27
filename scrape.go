@@ -73,12 +73,12 @@ var (
 )
 
 // Send request to retrieve data
-func pollMessages(url string, infos *scrapeInfos) error {
+func pollMessages(url string, csrfToken string) error {
 	infos.wg.Wait()
 	time.Sleep(time.Second)
 
 	hdr := http.Header{}
-	hdr.Set("x-csrf-token", infos.csrfToken)
+	hdr.Set("x-csrf-token", csrfToken)
 	hdr.Set("x-requested-with", "XMLHttpRequest")
 	logger.Printf("ready to send request: %s\n%v\n", url, hdr)
 	return c.Request("GET", url, nil, nil, hdr)
@@ -86,6 +86,7 @@ func pollMessages(url string, infos *scrapeInfos) error {
 
 func main() {
 	logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
+	logger.SetPrefix("\n")
 	// logger := log.New(ioutil.Discard, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 	var symbol = flag.String("symbol", "AAPL", "symbol to look for")
@@ -137,8 +138,9 @@ func main() {
 	})
 
 	go func() {
+		infos.wg.Wait()
 		url := fmt.Sprintf("https://stocktwits.com/streams/stream?stream=symbol&stream_id=%d&substream=all&username=undefined&symbol=undefined", infos.id)
-		err := pollMessages(url, infos)
+		err := pollMessages(url, infos.csrfToken)
 		if err != nil {
 			logger.Fatal(err)
 		}
