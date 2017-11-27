@@ -50,6 +50,15 @@ type Message struct {
 	TotalLikes int `json:"total_likes"`
 }
 
+// Stream is the response type of stocktwits
+// Since, Max is the id of Message, Max is actually smaller id
+type Stream struct {
+	More     bool      `json:"more"`
+	Since    int64     `json:"since,omitempty"`
+	Max      int64     `json:"max,omitempty"`
+	Messages []Message `json:"messages"`
+}
+
 type scrapeInfos struct {
 	symbol    string
 	csrfToken string
@@ -57,8 +66,26 @@ type scrapeInfos struct {
 	wg        sync.WaitGroup
 }
 
+var (
+	logger *log.Logger
+	infos  *scrapeInfos
+	c      *colly.Collector
+)
+
+// Send request to retrieve data
+func pollMessages(url string, infos *scrapeInfos) error {
+	infos.wg.Wait()
+	time.Sleep(time.Second)
+
+	hdr := http.Header{}
+	hdr.Set("x-csrf-token", infos.csrfToken)
+	hdr.Set("x-requested-with", "XMLHttpRequest")
+	logger.Printf("ready to send request: %s\n%v\n", url, hdr)
+	return c.Request("GET", url, nil, nil, hdr)
+}
+
 func main() {
-	logger := log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
+	logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lshortfile)
 	// logger := log.New(ioutil.Discard, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 	var symbol = flag.String("symbol", "AAPL", "symbol to look for")
@@ -80,7 +107,7 @@ func main() {
 	done := make(chan bool, 0)
 
 	// Instantiate default collector
-	c := colly.NewCollector()
+	c = colly.NewCollector()
 	// c.SetDebugger(&debug.LogDebugger{})
 	c.Limit(&colly.LimitRule{
 		DomainGlob:  "*stocktwits.com/streams",
@@ -90,7 +117,7 @@ func main() {
 	c.UserAgent = "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36"
 
 	// Extract infos for request
-	infos := scrapeInfos{symbol: *symbol}
+	infos = &scrapeInfos{symbol: *symbol}
 	infos.wg.Add(2)
 	c.OnHTML("meta[name=csrf-token]", func(e *colly.HTMLElement) {
 		defer infos.wg.Done()
@@ -109,16 +136,9 @@ func main() {
 		logger.Printf("id is %d\n", infos.id)
 	})
 
-	// Send request to retrieve data
 	go func() {
-		infos.wg.Wait()
-		time.Sleep(3 * time.Second)
 		url := fmt.Sprintf("https://stocktwits.com/streams/stream?stream=symbol&stream_id=%d&substream=all&username=undefined&symbol=undefined", infos.id)
-		hdr := http.Header{}
-		hdr.Set("x-csrf-token", infos.csrfToken)
-		hdr.Set("x-requested-with", "XMLHttpRequest")
-		logger.Printf("ready to send request: %s\n%v\n", url, hdr)
-		err := c.Request("GET", url, nil, nil, hdr)
+		err := pollMessages(url, infos)
 		if err != nil {
 			logger.Fatal(err)
 		}
@@ -134,10 +154,7 @@ func main() {
 		if strings.Index(r.Headers.Get("Content-Type"), "json") == -1 {
 			return
 		}
-		data := struct {
-			More     bool      `json:"more"`
-			Messages []Message `json:"messages"`
-		}{}
+		data := Stream{}
 		err := json.Unmarshal(r.Body, &data)
 		if err != nil {
 			logger.Fatal(err)
