@@ -64,6 +64,7 @@ type scrapeInfos struct {
 	csrfToken string
 	id        int
 	wg        sync.WaitGroup
+	mutex     sync.Mutex
 }
 
 var (
@@ -80,7 +81,7 @@ func pollMessages(url string, csrfToken string) error {
 	hdr := http.Header{}
 	hdr.Set("x-csrf-token", csrfToken)
 	hdr.Set("x-requested-with", "XMLHttpRequest")
-	logger.Printf("ready to send request: %s\n%v\n", url, hdr)
+	// logger.Printf("ready to send request: %s\n%v\n", url, hdr)
 	return c.Request("GET", url, nil, nil, hdr)
 }
 
@@ -90,8 +91,13 @@ func main() {
 	// logger := log.New(ioutil.Discard, "", log.Ldate|log.Ltime|log.Lshortfile)
 
 	var symbol = flag.String("symbol", "AAPL", "symbol to look for")
+	var maxDateStr = flag.String("date", "2014-11-11", "earliest date for data, default to 2014-11-11")
 	flag.Parse()
 	fName := fmt.Sprintf("%s-msg.csv", *symbol)
+	maxDate, err := time.Parse("2006-01-02", *maxDateStr)
+	if err != nil {
+		logger.Fatal(err)
+	}
 	file, err := os.Create(fName)
 	if err != nil {
 		logger.Fatalf("Cannot create file %q: %s\n", fName, err)
@@ -99,12 +105,12 @@ func main() {
 	}
 	defer file.Close()
 	writer := csv.NewWriter(file)
+	writer.Comma = '\t'
 	defer writer.Flush()
 
 	// Write CSV header
-	writer.Write([]string{"ID", "Body", "CreatedAt", "Sentiment", "Likes", "Replies"})
+	writer.Write([]string{"Id", "CreatedAt", "Body", "Sentiment", "Likes"})
 
-	messages := make([]*Message, 0)
 	done := make(chan bool, 0)
 
 	// Instantiate default collector
@@ -152,7 +158,7 @@ func main() {
 	})
 
 	c.OnResponse(func(r *colly.Response) {
-		logger.Printf("Response Headers: %v\n", r.Headers)
+		// logger.Printf("Response Headers: %v\n", r.Headers)
 		if strings.Index(r.Headers.Get("Content-Type"), "json") == -1 {
 			return
 		}
@@ -161,7 +167,30 @@ func main() {
 		if err != nil {
 			logger.Fatal(err)
 		}
-		logger.Print(data)
+		logger.Printf("Response got %d messages, %d - %d\n", len(data.Messages), data.Since, data.Max)
+		go func() {
+			url := fmt.Sprintf("https://stocktwits.com/streams/poll?stream=symbol&stream_id=%d&substream=all&max=%d", infos.id, data.Max)
+			err := pollMessages(url, infos.csrfToken)
+			if err != nil {
+				logger.Fatal(err)
+			}
+		}()
+		infos.mutex.Lock()
+		for _, msg := range data.Messages {
+			sentiment := "Neutral"
+			if msg.Sentiment.Name != "" {
+				sentiment = msg.Sentiment.Name
+			}
+			writer.Write(
+				[]string{
+					strconv.Itoa(msg.ID), msg.CreatedAt.Format(time.RFC3339), msg.Body,
+					sentiment, strconv.Itoa(msg.TotalLikes)})
+		}
+		infos.mutex.Unlock()
+		// end condition
+		if data.Messages[len(data.Messages)-1].CreatedAt.Before(maxDate) {
+			done <- true
+		}
 	})
 
 	c.OnError(func(_ *colly.Response, err error) {
@@ -171,6 +200,4 @@ func main() {
 	c.Visit(fmt.Sprintf("https://stocktwits.com/symbol/%s", infos.symbol))
 
 	<-done
-
-	fmt.Print(messages)
 }
