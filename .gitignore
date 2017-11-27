@@ -1,3 +1,8 @@
+*.csv
+_cache/
+debug
+*.html
+
 # Binaries for programs and plugins
 *.exe
 *.dll
