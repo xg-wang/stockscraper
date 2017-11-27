@@ -63,6 +63,7 @@ type scrapeInfos struct {
 	symbol    string
 	csrfToken string
 	id        int
+	delay     time.Duration
 	wg        sync.WaitGroup
 	mutex     sync.Mutex
 }
@@ -76,7 +77,7 @@ var (
 // Send request to retrieve data
 func pollMessages(url string, csrfToken string) error {
 	infos.wg.Wait()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(infos.delay * time.Millisecond)
 
 	hdr := http.Header{}
 	hdr.Set("x-csrf-token", csrfToken)
@@ -93,8 +94,10 @@ func main() {
 	var symbol = flag.String("symbol", "AAPL", "symbol to look for")
 	var maxDateStr = flag.String("date", "2014-11-11", "earliest date for data, default to 2014-11-11")
 	var maxID = flag.Int64("id", 0, "restart from maxID")
+	var delay = flag.Int64("delay", 500, "delay ms between request, default 500")
 	flag.Parse()
-	fName := fmt.Sprintf("%s-msg.csv", *symbol)
+
+	fName := fmt.Sprintf("%s.csv", *symbol)
 	maxDate, err := time.Parse("2006-01-02", *maxDateStr)
 	if err != nil {
 		logger.Fatal(err)
@@ -110,7 +113,14 @@ func main() {
 	defer writer.Flush()
 
 	// Write CSV header
-	writer.Write([]string{"Id", "CreatedAt", "Body", "Sentiment", "Likes"})
+	stat, err := file.Stat()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	// write head line if none
+	if stat.Size() < 40 {
+		writer.Write([]string{"Id", "CreatedAt", "Body", "Sentiment", "Likes"})
+	}
 
 	done := make(chan bool, 0)
 
@@ -125,7 +135,7 @@ func main() {
 	c.UserAgent = "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36"
 
 	// Extract infos for request
-	infos = &scrapeInfos{symbol: *symbol}
+	infos = &scrapeInfos{symbol: *symbol, delay: time.Duration(*delay)}
 	infos.wg.Add(2)
 	c.OnHTML("meta[name=csrf-token]", func(e *colly.HTMLElement) {
 		defer infos.wg.Done()
