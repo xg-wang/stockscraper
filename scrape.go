@@ -98,9 +98,9 @@ func main() {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	file, err := os.Create(fName)
+	file, err := os.OpenFile(fName, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
-		logger.Fatalf("Cannot create file %q: %s\n", fName, err)
+		logger.Fatalf("Cannot open file %q: %s\n", fName, err)
 		return
 	}
 	defer file.Close()

@@ -1,6 +1,6 @@
-*.csv
 _cache/
 debug
+scrape
 *.html
 
 # Binaries for programs and plugins
