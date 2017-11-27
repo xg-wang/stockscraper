@@ -40,7 +40,7 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 
 // Message represents a message extracted from stocktwits.com
 type Message struct {
-	ID        int    `json:"id"`
+	ID        int64  `json:"id"`
 	Body      string `json:"body"`
 	CreatedAt Time   `json:"created_at"`
 	Sentiment struct {
@@ -76,7 +76,7 @@ var (
 // Send request to retrieve data
 func pollMessages(url string, csrfToken string) error {
 	infos.wg.Wait()
-	time.Sleep(time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	hdr := http.Header{}
 	hdr.Set("x-csrf-token", csrfToken)
@@ -92,6 +92,7 @@ func main() {
 
 	var symbol = flag.String("symbol", "AAPL", "symbol to look for")
 	var maxDateStr = flag.String("date", "2014-11-11", "earliest date for data, default to 2014-11-11")
+	var maxID = flag.Int64("id", 0, "restart from maxID")
 	flag.Parse()
 	fName := fmt.Sprintf("%s-msg.csv", *symbol)
 	maxDate, err := time.Parse("2006-01-02", *maxDateStr)
@@ -146,6 +147,9 @@ func main() {
 	go func() {
 		infos.wg.Wait()
 		url := fmt.Sprintf("https://stocktwits.com/streams/stream?stream=symbol&stream_id=%d&substream=all&username=undefined&symbol=undefined", infos.id)
+		if *maxID != 0 {
+			url = fmt.Sprintf("https://stocktwits.com/streams/poll?stream=symbol&stream_id=%d&substream=all&max=%d", infos.id, *maxID)
+		}
 		err := pollMessages(url, infos.csrfToken)
 		if err != nil {
 			logger.Fatal(err)
@@ -167,6 +171,10 @@ func main() {
 		if err != nil {
 			logger.Fatal(err)
 		}
+		if data.Since == 0 || data.Max == 0 {
+			data.Since = data.Messages[0].ID
+			data.Max = data.Messages[len(data.Messages)-1].ID
+		}
 		logger.Printf("Response got %d messages, %d - %d\n", len(data.Messages), data.Since, data.Max)
 		go func() {
 			url := fmt.Sprintf("https://stocktwits.com/streams/poll?stream=symbol&stream_id=%d&substream=all&max=%d", infos.id, data.Max)
@@ -181,9 +189,10 @@ func main() {
 			if msg.Sentiment.Name != "" {
 				sentiment = msg.Sentiment.Name
 			}
+			msg.Body = strings.Replace(msg.Body, "\n", "\\n", -1)
 			writer.Write(
 				[]string{
-					strconv.Itoa(msg.ID), msg.CreatedAt.Format(time.RFC3339), msg.Body,
+					strconv.FormatInt(msg.ID, 10), msg.CreatedAt.Format(time.RFC3339), msg.Body,
 					sentiment, strconv.Itoa(msg.TotalLikes)})
 		}
 		infos.mutex.Unlock()
