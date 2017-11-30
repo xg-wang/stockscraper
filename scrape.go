@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gocolly/colly"
+	"github.com/gocolly/colly/debug"
 )
 
 // Time is our customized type to override UnmarshalJSON interface
@@ -95,7 +96,9 @@ func main() {
 	var maxDateStr = flag.String("date", "2014-11-11", "earliest date for data, default to 2014-11-11")
 	var maxID = flag.Int64("id", 0, "restart from maxID")
 	var delay = flag.Int64("delay", 500, "delay ms between request, default 500")
+	var retry = flag.Int("retry", 5, "retry request if failed, default 5, -1 for unlimited")
 	flag.Parse()
+	retryRemain := *retry
 
 	fName := fmt.Sprintf("%s.csv", *symbol)
 	maxDate, err := time.Parse("2006-01-02", *maxDateStr)
@@ -122,11 +125,12 @@ func main() {
 		writer.Write([]string{"Id", "CreatedAt", "Body", "Sentiment", "Likes"})
 	}
 
-	done := make(chan bool, 0)
+	done := sync.WaitGroup{}
+	done.Add(1)
 
 	// Instantiate default collector
 	c = colly.NewCollector()
-	// c.SetDebugger(&debug.LogDebugger{})
+	c.SetDebugger(&debug.LogDebugger{})
 	c.Limit(&colly.LimitRule{
 		DomainGlob:  "*stocktwits.com/streams",
 		Parallelism: 2,
@@ -162,7 +166,7 @@ func main() {
 		}
 		err := pollMessages(url, infos.csrfToken)
 		if err != nil {
-			logger.Fatal(err)
+			logger.Println(err)
 		}
 	}()
 
@@ -172,6 +176,8 @@ func main() {
 	})
 
 	c.OnResponse(func(r *colly.Response) {
+		// reset retry once succeed
+		retryRemain = *retry
 		// logger.Printf("Response Headers: %v\n", r.Headers)
 		if strings.Index(r.Headers.Get("Content-Type"), "json") == -1 {
 			return
@@ -180,6 +186,11 @@ func main() {
 		err := json.Unmarshal(r.Body, &data)
 		if err != nil {
 			logger.Fatal(err)
+		}
+		if len(data.Messages) == 0 {
+			logger.Println("receiving 0 messages, exit...")
+			defer done.Done()
+			return
 		}
 		if data.Since == 0 || data.Max == 0 {
 			data.Since = data.Messages[0].ID
@@ -190,10 +201,11 @@ func main() {
 			url := fmt.Sprintf("https://stocktwits.com/streams/poll?stream=symbol&stream_id=%d&substream=all&max=%d", infos.id, data.Max)
 			err := pollMessages(url, infos.csrfToken)
 			if err != nil {
-				logger.Fatal(err)
+				logger.Println(err)
 			}
 		}()
 		infos.mutex.Lock()
+		done.Add(1)
 		for _, msg := range data.Messages {
 			sentiment := "Neutral"
 			if msg.Sentiment.Name != "" {
@@ -205,18 +217,24 @@ func main() {
 					strconv.FormatInt(msg.ID, 10), msg.CreatedAt.Format(time.RFC3339), msg.Body,
 					sentiment, strconv.Itoa(msg.TotalLikes)})
 		}
+		done.Done()
 		infos.mutex.Unlock()
 		// end condition
 		if data.Messages[len(data.Messages)-1].CreatedAt.Before(maxDate) {
-			done <- true
+			done.Done()
 		}
 	})
 
-	c.OnError(func(_ *colly.Response, err error) {
-		logger.Printf("ERROR: %s", err)
+	c.OnError(func(res *colly.Response, err error) {
+		if retryRemain == 0 {
+			logger.Fatal("exit due to request failure.")
+		}
+		retryRemain--
+		logger.Print("ERROR: retrying..." + strconv.Itoa(*retry-retryRemain))
+		res.Request.Retry()
 	})
 
 	c.Visit(fmt.Sprintf("https://stocktwits.com/symbol/%s", infos.symbol))
 
-	<-done
+	done.Wait()
 }

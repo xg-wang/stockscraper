@@ -1,4 +1,5 @@
 _cache/
+*.csv
 debug
 scrape
 *.html
