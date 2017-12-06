@@ -212,6 +212,7 @@ func main() {
 				sentiment = msg.Sentiment.Name
 			}
 			msg.Body = strings.Replace(msg.Body, "\n", "\\n", -1)
+			msg.Body = strings.Replace(msg.Body, "\t", " ", -1)
 			writer.Write(
 				[]string{
 					strconv.FormatInt(msg.ID, 10), msg.CreatedAt.Format(time.RFC3339), msg.Body,
